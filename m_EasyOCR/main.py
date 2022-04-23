@@ -17,10 +17,11 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
 # loop through all images in image directory
-for img_name in filenames:
+for img in filenames:
     # read image (full path to image)
-    img_path = os.path.join(imgs_dir, img_name)
+    img_path = os.path.join(imgs_dir, img)
     output = reader.readtext(img_path)
+    img_name = os.path.splitext(img)[0]
 
     # create file for each image with the results (name format: result_imgname.txt)
     with open('%s/result_%s.txt' % (output_dir, img_name), 'w') as output_file:
