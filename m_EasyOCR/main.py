@@ -25,7 +25,7 @@ for img in filenames:
 
     # create file for each image with the results (name format: result_imgname.txt)
     with open('%s/result_%s.txt' % (output_dir, img_name), 'w') as output_file:
-        output_file.write(' '.join(str(result) for result in output) + '\n')
+        output_file.write('\n'.join(str(result) for result in output))
 
 
 
