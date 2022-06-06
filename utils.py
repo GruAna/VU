@@ -8,14 +8,17 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import operator
 import itertools
+from tqdm import tqdm  
 
-def image_text_crop(images, ground_truth, one_file='True', result_folder='./results'):
+
+def image_text_crop(images, filenames, ground_truth, one_file=True, result_folder='./results'):
     """
-    Crops and saves images based on bounding box ground truth fro each text region.
+    Crops and saves images based on bounding box ground truth for each text region.
     Creates text file with corresponding annotation.
 
     Parameter:
     - images: loaded images
+    - filenames: list of image filenames with extension
     - groun_truth: list of gt tuples first text annotation, second np.array of 
     left top and bottom right coodinates, format: ('text', [[tl,tl],[br,br]])
     """
@@ -30,7 +33,7 @@ def image_text_crop(images, ground_truth, one_file='True', result_folder='./resu
         os.mkdir(result_folder)
     
     all_texts = []
-    for i, img in enumerate(images):
+    for i, img in tqdm(enumerate(images)):
         name, ext = os.path.splitext(filenames[i])
 
         # count regions in one image - used for file naming purposes
@@ -43,21 +46,23 @@ def image_text_crop(images, ground_truth, one_file='True', result_folder='./resu
             # create image file:
             # name in format "original-00region.ext"
             new_name = name + '-' + str(region).zfill(3)
-            cv.imwrite(os.path.join(result_folder, new_name + ext), cropped)
+            ext_tif = '.tif'
 
+            cv.imwrite(os.path.join(result_folder, new_name + ext_tif), cropped)
             # create  text annotation file(s)
             if one_file:
-                all_texts.append(new_name + ext + '\t' + text)
+                all_texts.append(new_name + ext_tif + '\t' + text)
             else:
                 # one file for each image with word
-                with open(os.path.join(result_folder, new_name + '.txt'), 'w') as f:
+                with open(os.path.join(result_folder, new_name + '.gt.txt'), 'w') as f:
                     f.write(text)
             region += 1
     
-    with open(os.path.join(result_folder, 'gt.txt'), 'w') as f:
-        for line in all_texts:
-            f.writelines(line+'\n')
-
+    if one_file:
+        with open(os.path.join(result_folder, 'gt.txt'), 'w') as f:
+            for line in all_texts:
+                f.writelines(line+'\n')
+            
 
 def shrink_all(images, width):
     """
@@ -70,7 +75,7 @@ def shrink_all(images, width):
             ratio = width / image.shape[1]
             height = int(image.shape[0] * ratio)
             new_size = (width, height)  
-            scaled.append(cv.resize(imapge, new_size, interpolation=cv.INTER_AREA))
+            scaled.append(cv.resize(image, new_size, interpolation=cv.INTER_AREA))
         else:
             scaled.append(image)
     return scaled
@@ -166,7 +171,7 @@ def iou_image(pred_boxes, gt_boxes):
     return ious
 
 # -------------------------- XML parsing -------------------------- 
-def read_gt_ctw_txt(data):
+def read_gt_ctw_test(data, scaling_ratio=1):
     """
     SCUT-CTW1500 dataset (test labels parser)
     """
@@ -175,15 +180,25 @@ def read_gt_ctw_txt(data):
 
 
     annotations = []
-    with open("text.txt", "r") as file:
+    with open(data, "r") as file:
         for line in file:
-            text = line.split(",")
-            text[-1] = text[-1].replace("#","")
-            annotations.append(text)
+            line = line.rstrip('\n')
+            text = line.split("####")
+            label = text[-1]
+            coordinates = text[0].split(",")[:-1]
+            c = [int(i) for i in coordinates]
+            minX = min(c[::2])*scaling_ratio
+            maxX = max(c[::2])*scaling_ratio
+            minY = min(c[1::2])*scaling_ratio
+            maxY = max(c[1::2])*scaling_ratio
+
+            bbox_coords = np.array( [[minX, minY], [maxX, maxY]] )
+            annotations.append((label, bbox_coords))
+
     return annotations
 
 
-def get_labels_xml(xml_file, scaling_ratio=1):
+def read_gt_ctw_train(xml_file, scaling_ratio=1):
     """
     SCUT-CTW1500 dataset (XML - train labels parser)
     Returns ground truth in a tuple - first contains coordinates (8 numbers), second word (string).
@@ -196,9 +211,10 @@ def get_labels_xml(xml_file, scaling_ratio=1):
 
     # get values in this order: height, left coordinate, top coordinate, width
     for i, bbox in enumerate(root[0].findall('box')):
-        # from dict.values to list of integers
-        bbox_integer = [int(value) for value in bbox.attrib.values()]
-
+        # create list of integers with bounding box values, sort by attribute name
+        # in case in different document there is a different order of attributes
+        bbox_integer = [int(val) for key, val in sorted(bbox.attrib.items(), key = lambda el: el[0])]
+        
         # calculate bottom coordinate of bounding rectangle x+width, y+height
         x_right= int((bbox_integer[1] + bbox_integer[3]) * scaling_ratio)
         y_bottom = int((bbox_integer[2] + bbox_integer[0]) * scaling_ratio)
@@ -214,6 +230,44 @@ def get_labels_xml(xml_file, scaling_ratio=1):
         gt.append((label, bbox_coords))
 
     return gt
+    
+    
+def read_gt_kaist(xml_file, scaling_ratio=1):
+    """
+    KAISTdetectiondataset dataset (XML - labels parser)
+    Returns ground truth in a tuple - first contains coordinates (8 numbers), second word (string).
+    If image was previously scaled, one might need to scale also gt coordinates by given ratio.
+    """
+    gt = []
+
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+    print(root[0][2])
+    # get values in this order: height, width, x (left) coordinate, y (top) coordinate
+    for i, bbox in enumerate(root[0][2].findall('word')):
+        # create list of integers with bounding box values, sort by attribute name
+        # in case in different document there is a different order of attributes
+        bbox_integer = [int(val) for key, val in sorted(bbox.attrib.items(), key = lambda el: el[0])]
+        
+        # calculate bottom coordinate of bounding rectangle x+width, y+height
+        x_right= int((bbox_integer[2] + bbox_integer[1]) * scaling_ratio)
+        y_bottom = int((bbox_integer[3] + bbox_integer[0]) * scaling_ratio)
+        x_left = int(bbox_integer[2] * scaling_ratio)
+        y_top = int(bbox_integer[3] * scaling_ratio)
+
+        bbox_coords = np.array([[x_left, y_top], [x_right, y_bottom]])
+
+        # get label
+        label = ""
+        for char in root[0][2][i].findall('character'):
+            ch = char.get('char')
+            print(char)
+            label += ch
+        # create list of labels and corresponding boundin boxes
+        gt.append((label, bbox_coords))
+
+    return gt
+    
     
 # -------------------------- Text Comparision -------------------------- 
 def compare_text_cer(text, special_characters=False, case_sensitive=False):
@@ -244,18 +298,18 @@ def compare_text_cer(text, special_characters=False, case_sensitive=False):
     # for every predicted word find its corresponding gt wordle
     corresponding_words = []
     for word_pred in words_pred:    
-        min_dist = 1000
+        min_dist = (1000, (0, 0))
         min_gt_word = ""                  
         for word_gt in words_gt: 
             l_dist = levenshtein_distance(word_gt, word_pred)
-            if l_dist[0] < min_dist:
-                min_dist = l_dist[0]
+            if l_dist[0] < min_dist[0]:
+                min_dist = l_dist
                 min_gt_word = word_gt
         # count normalized cer (the result will be from 0 to 1), 1 is the worst
         # for computation we devide Levenshtein dist. by sum 
         # of the length of the word and count of insertions performed
-        if len(word_gt) > 0:
-            cer = min_dist / (len(word_gt) + l_dist[1][2])
+        if len(min_gt_word) > 0 and len(word_pred) > 0:
+            cer = min_dist[0] / (len(min_gt_word) + min_dist[1][2])
         else:
             cer = 1
         corresponding_words.append((min_gt_word, word_pred, cer))
